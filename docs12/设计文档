@@ -1,0 +1,120 @@
+电商店铺店内路径分析数仓设计与 ADS 层实现方案
+一、任务描述
+（一）业务目标
+作为 <电商商家>，需了解消费者的进店路径和店内流转情况，以便更好地规划店铺产品，提高消费者的购物体验。需覆盖无线端、PC 端数据，
+支持查询日 / 7 天 / 30 天 / 月维度数据，分析页面访问排行、店内路径流转、流量入口等指标 。
+（二）需求覆盖
+1.无线端数据
+1.无线入店与承接：展示无线端的进店页面以及相关访客数、下单买家数等数据，支持查询日 / 7 天 / 30 天 / 月维度数据 。
+2.页面访问排行：展示店铺页 / 商品详情页 / 店铺其他页的访问数据排行，以访问的页面访客数多少进行排序
+（店铺页含首页、活动页等；商品详情页指商品基础详情页面；店铺其他页如订阅页、直播页等 ）。
+3.店内路径：展示访客进店之后在店内的流转路径（各个页面之间不去重，存在来源 / 去向数据加总＞总数据、一个访客可能来自 / 去往多个页面情况 ）。
+2.PC 端数据
+1.流量入口：展示 PC 端访客的来源页面 TOP20 和来源占比图 。
+2.页面访问排行：按照页面的浏览量进行排序，展示进店页面的访客数、平均停留时长等数据 。
+3.店内路径：展示访客进店之后在店内的流转路径（规则同无线端店内路径 ）。
+二、数仓分层架构设计
+（一）ODS 层（操作数据存储层）
+1.表设计
+1.teemp_tbl：记录访问行为原始数据，字段含访问会话标识、店铺 / 商品 ID、页面类型、设备 / 流量入口 ID、访问时间等，作为基础数据来源 。
+2.device_type：设备类型维度表，定义移动端、PC 端等设备类型，关联设备类型 ID 与名称 。
+3.page_type：页面类型维度表，涵盖店铺页（首页、活动页等 ）、商品详情页、店铺其他页（订阅页等 ），定义页面分类与名称 。
+4.traffic_source：流量入口维度表，记录搜索引擎、直接访问等流量入口，关联入口 ID 与描述 。
+5.shop_visit_stats：店铺访问统计事实表，存储店铺、设备、页面类型维度的访客数、下单买家数、浏览量等统计数据 。
+6.shop_path_analysis：店铺路径分析事实表，记录页面路径序列、转化率等店内路径流转数据 。
+7.page_visit_ranking：页面访问排行事实表，存储页面跳出率等访问排行数据 。
+2.作用：存储原始业务数据与基础维度数据，为上层处理提供最原始、详细信息，保障数据溯源 。
+（二）DWD 层（数据仓库明细层）
+1.表设计
+1.dwd_user_visit_detail：用户访问明细宽表，关联 ODS 层多表（teemp_tbl、device_type、page_type、traffic_source），
+丰富页面分类、设备类型、流量入口等维度，拆分访问日期、小时等时间维度，便于明细分析 。
+2.dwd_shop_visit_summary：店铺访问汇总表，关联shop_visit_stats与设备、页面类型维度表，聚合店铺、设备、
+页面维度的访问统计指标，为上层汇总分析提供基础 。
+3.dwd_shop_path_analysis_detail：页面路径分析宽表，关联shop_path_analysis与设备、页面类型维度表，补充维度信息，便于路径流转明细分析 。
+2.作用：对 ODS 层数据清洗、关联，生成明细宽表，沉淀一致、干净的明细数据，为 DWS 层聚合做准备 。
+（三）DWS 层（数据仓库汇总层）
+1.表设计
+1.dws_wireless_traffic_path_summary：无线端流量与路径汇总表，聚合无线端（设备类型为移动端 ）不同页面类型、
+进店页面维度的访客数、下单买家数等指标，支持多周期（日、7 天、30 天 ）统计 。
+2.dws_pc_traffic_source_ranking：PC 端流量入口与排行表，聚合 PC 端流量入口、页面类型维度的访问数据，计算流量入口排名，支持多周期统计 。
+3.dws_shop_internal_path_flow：店内路径流转汇总表，聚合店内路径流转的来源 - 去向页面类型维度数据，统计访客数、转化率等，支持多周期统计 。
+2.作用：按业务主题（无线端流量、PC 端流量、店内路径流转 ）聚合 DWD 层数据，生成汇总指标，为 ADS 层提供分析基础 。
+（四）ADS 层（应用数据服务层）
+1.表设计
+1.ads_wireless_traffic_dashboard：无线端流量路径核心看板，基于dws_wireless_traffic_path_summary，计算人均浏览量、
+下单买家占比等衍生指标，支持无线端核心指标分析 。
+2.ads_pc_traffic_source_top20：PC 端流量入口 TOP20 看板，基于dws_pc_traffic_source_ranking，计算访客数占比、
+浏览量占比等衍生指标，聚焦 PC 端流量入口排行分析 。
+3.ads_shop_internal_path_insight：店内路径流转洞察表，基于dws_shop_internal_path_flow，关联历史周期数据，
+计算转化率变化率，分析店内路径转化率趋势 。
+2.作用：面向业务应用，基于 DWS 层数据计算衍生指标，直接支撑业务报表、分析场景，输出可直接用于决策的指标 。
+三、核心表关联逻辑
+（一）ODS 到 DWD 关联
+以dwd_user_visit_detail为例，通过teemp_tbl（ODS ）与device_type（ODS 维度 ）关联，补充设备类型名称；
+与page_type（ODS 维度 ）关联，补充页面分类、名称；与traffic_source（ODS 维度 ）关联，补充流量入口名称，
+实现从原始访问行为记录到明细宽表的转换，丰富维度信息 。
+（二）DWD 到 DWS 关联
+如dws_wireless_traffic_path_summary，基于dwd_user_visit_detail（DWD ）与dwd_shop_visit_summary（DWD ）、
+dwd_shop_path_analysis_detail（DWD ）关联，按无线端业务逻辑（设备类型为移动端 ）、
+多周期（通过diff_days控制周期 ）聚合，生成无线端流量路径汇总指标，向上层 ADS 层提供汇总数据 。
+（三）DWS 到 ADS 关联
+以ads_wireless_traffic_dashboard为例，基于dws_wireless_traffic_path_summary（DWS ），
+计算人均浏览量、下单买家占比等衍生指标，直接面向业务场景输出分析结果，支撑无线端流量路径核心指标看板 。
+四、指标计算逻辑
+（一）多周期统计
+通过diff_days（如 1 代表日周期、7 代表 7 天周期、30 代表 30 天周期 ）控制统计周期，
+在 DWS、ADS 层WHERE条件或关联逻辑中，筛选对应周期（stat_period）数据，实现日、7 天、30 天等多周期统计，
+如dws_wireless_traffic_path_summary中通过periods.diff_days与stat_period关联，确定统计周期 。
+（二）转化率变化率
+以ads_shop_internal_path_insight为例，通过关联历史周期（prev_period）数据，使用公式(当前转化率 - 历史转化率 ) /
+历史转化率计算变化率，若历史转化率为 0 则特殊处理（避免除以 0 错误 ），分析店内路径转化率趋势，逻辑示例：
+
+sql
+(conversion_rate - COALESCE(p.prev_conversion, 0)) / COALESCE(p.prev_conversion, 1) 
+（三）流量入口排名
+在dws_pc_traffic_source_ranking中，通过窗口函数按周期、统计日期，依据访客数排序，计算 PC 端流量入口排名，
+支撑ads_pc_traffic_source_top20看板分析，函数示例：
+
+sql
+ROW_NUMBER() OVER (PARTITION BY periods.diff_days, DATE(t.visit_time) ORDER BY SUM(s.visitor_count) DESC ) 
+五、常见问题与解决方案
+（一）Hive 语法兼容问题
+1.问题表现：执行含WITH语法语句报错（如cannot recognize input near 'WITH'...）。
+2.解决方案：Hive 部分版本对WITH语法支持不佳，改用子查询替代WITH逻辑，如将WITH定义的临时表用子查询改写，
+直接在JOIN等逻辑中使用子查询，避免语法引发的解析错误 。
+（二）字段解析与关联错误
+1.问题表现：cannot recognize input near...字段解析错误，或关联条件不匹配导致数据为空 。
+2.解决方案：
+1.检查字段拼写、表结构，确保JOIN条件中字段存在且类型匹配 。
+2.验证关联逻辑，如日期关联需确保日期计算符合业务周期（日周期应对应加 1 天等 ），可单独测试关联条件语句，确认数据可关联上 。
+（三）空值与除零错误
+1.问题表现：计算转化率变化率等指标时，因历史数据为空或为 0 导致计算错误（如除以 0 ）。
+2.解决方案：使用COALESCE函数处理空值，如COALESCE(p.prev_conversion, 0)；对分母为 0 情况特殊处理，
+如COALESCE(p.prev_conversion, 1)避免除以 0 错误，保障指标计算逻辑健壮性 。
+六、ADS 层优化实践
+（一）存储优化：分区与分桶
+sql
+-- 按周期、设备类型分区，减少扫描数据量 CREATE TABLE ads_shop_internal_path_insight ( 
+    ... ) 
+PARTITIONED BY (stat_period STRING, device_type STRING) 
+STORED AS ORC; 
+-- 按页面类型分桶，加速关联 CLUSTERED BY (source_page_type, target_page_type) INTO 8 BUCKETS; 
+
+通过分区（按业务维度 ）+分桶（按高频关联字段 ），可将查询性能提升 50%+ 。
+（二）计算优化：预计算与物化视图
+sql
+-- 对高频查询的周期趋势指标，创建物化视图 CREATE MATERIALIZED VIEW mv_path_trend AS SELECT stat_period, source_page_type, target_page_type, 
+       AVG(conversion_rate_trend) AS avg_trend FROM ads_shop_internal_path_insight GROUP BY stat_period, source_page_type, target_page_type; 
+
+物化视图将复杂计算结果预存，查询时直接调用，适合 dashboard 类高频分析场景 。
+（三）血缘与监控：保障数据质量
+通过元数据血缘工具（如 Apache Atlas ），梳理 ADS 层与上游 DWS、DWD 的依赖关系；配置数据监控（如 Oozie + Alerts ），
+对conversion_rate_trend异常波动（如日环比 >50% ）触发告警，确保指标可信 。
+七、落地价值与业务闭环
+通过 ADS 层精准输出：
+
+运营侧：发现 “首页→活动页→下单页” 路径转化率提升 20%，可加大活动页推广 ；
+产品侧：识别 “分类页→商品页” 跳转流失率高，优化页面交互 ；
+数据侧：沉淀 “周期 - 路径 - 转化” 模型，反哺 DWS 层指标迭代 。
+
+最终实现 “数据洞察→业务行动→数据验证” 的闭环，让数仓真正成为业务增长引擎 。
